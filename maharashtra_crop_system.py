@@ -163,19 +163,24 @@ def load_model():
         raise
 
 
-import requests
-import os
-
-
 def openrouter_chat(messages):
 
-    api_key = os.getenv("OPENROUTER_API_KEY")
+    # Try Streamlit secrets first (Cloud)
+    api_key = None
+
+    if "OPENROUTER_API_KEY" in st.secrets:
+        api_key = st.secrets["OPENROUTER_API_KEY"]
+    else:
+        api_key = os.getenv("OPENROUTER_API_KEY")
+
+    if not api_key:
+        return "OpenRouter API key not found."
 
     url = "https://openrouter.ai/api/v1/chat/completions"
 
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-    data = {"model": "openai/gpt-4o-mini", "messages": messages}  # ✅ FIXED MODEL
+    data = {"model": "openai/gpt-4o-mini", "messages": messages}
 
     try:
         response = requests.post(url, headers=headers, json=data, timeout=30)
