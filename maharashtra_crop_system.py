@@ -162,36 +162,11 @@ def load_model():
         logger.error(f"Failed to load model: {e}")
         raise
 
-
-def openrouter_chat(messages):
-
-    # Try Streamlit secrets first (Cloud)
-    api_key = None
-
-    if "OPENROUTER_API_KEY" in st.secrets:
-        api_key = st.secrets["OPENROUTER_API_KEY"]
-    else:
-        api_key = os.getenv("OPENROUTER_API_KEY")
-
-    if not api_key:
-        return "OpenRouter API key not found."
-
-    url = "https://openrouter.ai/api/v1/chat/completions"
-
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-
-    data = {"model": "openai/gpt-4o-mini", "messages": messages}
-
-    try:
-        response = requests.post(url, headers=headers, json=data, timeout=30)
-
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"]
-        else:
-            return f"Error {response.status_code}: {response.text}"
-
-    except Exception as e:
-        return f"Connection Error: {str(e)}"
+# Chat helper used to live here but was refactored into the
+# separate module `openrouter_chat.py` to centralize API logic.
+# Keeping this comment in case anyone searches for the old
+# implementation; the import at the bottom of this file now
+# references the module instead.
 
 
 # --- Secure Secrets Setup (for Streamlit Cloud + Local Dev) ---
@@ -7010,6 +6985,12 @@ with st.sidebar:
                 reply = openrouter_chat.chat_with_openrouter(
                     user_input, st.session_state["chat_history"]
                 )
+            # if something went wrong the module returns a string
+            # starting with "Error:"; show that to the user instead of
+            # adding it to the normal history.
+            if reply.startswith("Error:"):
+                st.error(reply)
+            else:
                 st.session_state["chat_history"].append(
                     {"role": "user", "content": user_input}
                 )
