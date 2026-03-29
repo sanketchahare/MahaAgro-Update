@@ -1,93 +1,127 @@
-﻿# Byte-compiled / cache
+﻿# Python cache & bytecode
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
 
-# Virtual environments
+# Virtual Environments
 .venv/
 venv/
 krushi_env/
 GC2/
+env/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Environment files
+# Environment files & secrets
 .env
 .env.local
 .env.*.local
+serviceAccountKey.json
+firebase_config.py
+print_secrets.py
 
-# Editor directories and files
+# Large Model Files (critical!)
+*.h5
+best_model*.h5
+model_*.h5
+*.pkl
+*.joblib
+*.pb
+saved_model/
+
+# Large Datasets (critical!)
+*.csv
+*.xlsx
+*.xls
+Fertilizer*.csv
+Crop*.csv
+agriculture_dataset.csv
+weather_data.csv
+pest_risk_dataset.csv
+Crop\ and\ fertilizer\ dataset.csv
+
+# Streamlit cache
+.streamlit/
+.streamlit_cache/
+.streamlit_cache2/
+
+# IDE & Editor
 .vscode/
 .idea/
 *.sublime-workspace
 *.sublime-project
+*.iml
+*.swp
+*.swo
 
 # System files
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Logs and databases
+# Logs & databases
 *.log
 *.sqlite3
 *.db
+firebase-debug.log
+training_history.png
 
-# Python packaging
-build/
-dist/
-*.egg-info/
-pip-wheel-metadata/
-
-# Model artifacts — recommended to exclude large model files from GitHub
-# Use Git LFS or external storage for models. Uncommenting excludes them.
-*.h5
-saved_model/
-
-# Archives / backups / temp
+# Archives & backups
 *.zip
 *.bak
+*.backup
 *~
-training_history.png
-firebase-debug.log
+*.tmp
+
+# Firebase
+firebase.json
+firestore.indexes.json
+firestore.rules
+
+# MongoDB
+mongo_offline.json
 
 # Jupyter
 .ipynb_checkpoints/
+*.ipynb
 
-# IDE
-*.iml
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Project-specific (keep CSV out of git if large)
-agriculture_dataset.csv
+# Development
+debug_output/
+test_output/
+*.html
+docs/.build
+
+# Archives folder (keep local, don't commit)
 archive/
 dataset/
-serviceAccountKey.json
 
-# Ignore virtual environment and heavy folders
-venv/
-__pycache__/
+# Misc project files
+Include/
 Lib/
-
-# Ignore large/binary files
+pyvenv.cfg
 *.dll
 *.pyd
-*.pkl
-*.zip
-*.csv
-*.h5
-
-# Ignore TensorFlow build files
-*.pb
-*.so
-# Ignore virtual environment and heavy folders
-venv/
-__pycache__/
-Lib/
-
-# Ignore large/binary files
-*.dll
-*.pyd
-*.pkl
-*.zip
-*.csv
-*.h5
-
-# Ignore TensorFlow build files
-*.pb
-*.so
+.git/
+.gitkeep

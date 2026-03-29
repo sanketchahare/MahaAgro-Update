@@ -13,3 +13,4 @@ python-dotenv
 bcrypt
 google-generativeai
 openai>=1.0.0
+apscheduler>=3.10.4

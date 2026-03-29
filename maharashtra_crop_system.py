@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 # Local module imports
 from mongodb_auth import MongoFarmerAuth
 from enhanced_pest_data import PEST_DATABASE
+from scheduler import init_scheduler, get_scheduler
 
 # Logging setup
 import logging
@@ -161,6 +162,7 @@ def load_model():
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
         raise
+
 
 # Chat helper used to live here but was refactored into the
 # separate module `openrouter_chat.py` to centralize API logic.
@@ -1036,6 +1038,26 @@ class MaharashtraAgriculturalSystem:
                         ],
                     }
 
+                leaf_valid, leaf_score, leaf_message = self.assess_leaf_image(
+                    image_array
+                )
+                if not leaf_valid:
+                    return {
+                        "disease": "Invalid Crop Image",
+                        "confidence": 0.0,
+                        "all_predictions": [("Invalid Crop Image", 100.0)],
+                        "model_accuracy": "N/A",
+                        "image_quality": self.quality_to_text(quality_score),
+                        "recommendations": [
+                            "Upload a clear leaf/plant image",
+                            "Ensure the leaf occupies most of the frame",
+                            "Avoid photos of faces, animals, or inanimate objects",
+                        ],
+                        "error": "Please upload a valid crop leaf image for accurate disease detection.",
+                        "leaf_validation_score": leaf_score,
+                        "leaf_validation_message": leaf_message,
+                    }
+
                 # Advanced preprocessing pipeline
                 processed_images = self.advanced_preprocessing_pipeline(image_array)
 
@@ -1149,6 +1171,468 @@ class MaharashtraAgriculturalSystem:
         )
 
         return max(0, min(1, quality_score))
+
+    def validate_image_file(self, uploaded_file):
+        """Professional image file validation with detailed diagnostics"""
+        import io
+
+        validation_result = {
+            "valid": True,
+            "errors": [],
+            "warnings": [],
+            "quality_metrics": {},
+            "severity": "success",  # success, warning, error, critical
+        }
+
+        try:
+            # 1. File type validation
+            file_extension = uploaded_file.name.split(".")[-1].lower()
+            if file_extension not in ["jpg", "jpeg", "png"]:
+                validation_result["valid"] = False
+                validation_result["errors"].append(
+                    f"Unsupported file format: .{file_extension}. Only JPG, JPEG, PNG accepted."
+                )
+                validation_result["severity"] = "error"
+                return validation_result
+
+            # 2. File size validation (limit to 15MB)
+            file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
+            if file_size_mb > 15:
+                validation_result["valid"] = False
+                validation_result["errors"].append(
+                    f"File size too large: {file_size_mb:.2f}MB. Maximum allowed: 15MB."
+                )
+                validation_result["severity"] = "error"
+                return validation_result
+
+            # 3. Image loading validation
+            try:
+                image = Image.open(io.BytesIO(uploaded_file.getvalue()))
+            except Exception as e:
+                validation_result["valid"] = False
+                validation_result["errors"].append(
+                    f"Corrupted or invalid image file: {str(e)}"
+                )
+                validation_result["severity"] = "critical"
+                return validation_result
+
+            # 4. Image dimensions validation
+            width, height = image.size
+            aspect_ratio = width / height
+
+            if width < 150 or height < 150:
+                validation_result["warnings"].append(
+                    f"Low resolution detected ({width}x{height}px). Minimum recommended: 150x150px."
+                )
+                validation_result["severity"] = (
+                    "warning"
+                    if validation_result["severity"] == "success"
+                    else validation_result["severity"]
+                )
+
+            if width > 5000 or height > 5000:
+                validation_result["warnings"].append(
+                    f"Very high resolution ({width}x{height}px). May slow down analysis."
+                )
+
+            # 5. Color mode validation
+            if image.mode not in ["RGB", "RGBA", "L"]:
+                validation_result["warnings"].append(
+                    f"Non-standard color mode: {image.mode}. Converting to RGB."
+                )
+
+            # 6. Image metadata validation
+            try:
+                if hasattr(image, "_getexif") and image._getexif() is None:
+                    validation_result["quality_metrics"]["has_metadata"] = False
+            except:
+                pass
+
+            # 7. Quality metrics
+            img_array = np.array(image)
+            if len(img_array.shape) == 2:  # Grayscale
+                img_array = np.stack([img_array] * 3, axis=2)
+
+            if img_array.shape[2] == 4:  # RGBA to RGB
+                img_array = img_array[:, :, :3]
+
+            img_normalized = img_array.astype(np.float32) / 255.0
+
+            brightness = np.mean(img_normalized)
+            contrast = np.std(img_normalized)
+
+            validation_result["quality_metrics"] = {
+                "file_size_mb": round(file_size_mb, 2),
+                "dimensions": f"{width}x{height}",
+                "aspect_ratio": round(aspect_ratio, 2),
+                "brightness": round(brightness, 3),
+                "contrast": round(contrast, 3),
+                "color_mode": image.mode,
+                "format": image.format,
+            }
+
+            # 8. Content validation (too dark/bright)
+            if brightness < 0.05:
+                validation_result["errors"].append(
+                    "Image is too dark. Brightness is critically low. Please retake in better lighting."
+                )
+                validation_result["valid"] = False
+                validation_result["severity"] = "error"
+            elif brightness > 0.95:
+                validation_result["errors"].append(
+                    "Image is overexposed/too bright. Please retake with less glare."
+                )
+                validation_result["valid"] = False
+                validation_result["severity"] = "error"
+            elif brightness < 0.15 or brightness > 0.85:
+                validation_result["warnings"].append(
+                    "Lighting is suboptimal. For best results, use natural daylight."
+                )
+                if validation_result["severity"] == "success":
+                    validation_result["severity"] = "warning"
+
+            # 9. Contrast validation
+            if contrast < 0.02:
+                validation_result["warnings"].append(
+                    "Low contrast detected. Image may lack detail clarity."
+                )
+                if validation_result["severity"] == "success":
+                    validation_result["severity"] = "warning"
+
+        except Exception as e:
+            validation_result["valid"] = False
+            validation_result["errors"].append(f"Validation error: {str(e)}")
+            validation_result["severity"] = "critical"
+
+        return validation_result
+
+    def display_professional_image_alert(self, validation_result: dict) -> None:
+        """
+        Display professional, color-coded image validation feedback.
+
+        Severity levels:
+            success  → green confirmation banner
+            warning  → amber two-column panel (issues + metrics)
+            error    → red bordered error panel with fix suggestions
+            critical → deep-red bordered panel (corrupted/unreadable file)
+
+        Regardless of severity, a "continue to other tabs" notice is appended
+        so the user always knows analysis of weather/soil/pest/irrigation is
+        still available.
+        """
+
+        severity = validation_result.get("severity", "success")
+        is_valid = validation_result.get("valid", True)
+        errors = validation_result.get("errors", [])
+        warnings = validation_result.get("warnings", [])
+        metrics = validation_result.get("quality_metrics", {})
+
+        # ── 1. SUCCESS ──────────────────────────────────────────────────────
+        if severity == "success" and is_valid:
+            st.markdown(
+                """
+                <div style="
+                    background: linear-gradient(135deg, #1B5E20 0%, #2E7D32 100%);
+                    border-left: 5px solid #66BB6A;
+                    border-radius: 10px;
+                    padding: 1rem 1.4rem;
+                    margin: 0.8rem 0;
+                    display: flex;
+                    align-items: center;
+                    gap: 0.7rem;
+                    box-shadow: 0 3px 12px rgba(0,0,0,0.25);
+                ">
+                    <span style="font-size:1.5rem;">✅</span>
+                    <div>
+                        <p style="margin:0; color:#C8E6C9; font-weight:600; font-size:0.95rem;">
+                            Image Validation Passed
+                        </p>
+                        <p style="margin:0; color:#A5D6A7; font-size:0.82rem;">
+                            Your image meets all quality requirements. Proceed with AI analysis.
+                        </p>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            return
+
+        # ── 2. WARNING ──────────────────────────────────────────────────────
+        if severity == "warning":
+            st.markdown(
+                """
+                <div style="
+                    background: linear-gradient(135deg, #4A3000 0%, #5D3D00 100%);
+                    border: 1px solid #FF9800;
+                    border-left: 5px solid #FF9800;
+                    border-radius: 10px;
+                    padding: 1rem 1.4rem;
+                    margin: 0.8rem 0;
+                    box-shadow: 0 3px 12px rgba(0,0,0,0.3);
+                ">
+                    <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.7rem;">
+                        <span style="font-size:1.4rem;">⚠️</span>
+                        <span style="color:#FFB74D; font-weight:700; font-size:1rem;">
+                            Image Quality Warning
+                        </span>
+                        <span style="
+                            background:#FF9800; color:#1a1a1a;
+                            font-size:0.7rem; font-weight:700;
+                            padding:2px 8px; border-radius:20px; margin-left:auto;
+                        ">REDUCED ACCURACY</span>
+                    </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            col_warn, col_metrics = st.columns([1.5, 1])
+
+            with col_warn:
+                st.markdown(
+                    "<p style='color:#FFB74D; font-weight:600; font-size:0.88rem;"
+                    " margin:0 0 0.4rem;'>⚙️ Detected Issues:</p>",
+                    unsafe_allow_html=True,
+                )
+                for w in warnings:
+                    st.markdown(
+                        f"<p style='color:#FFCC80; font-size:0.84rem; margin:0.2rem 0;'>"
+                        f"&nbsp;&nbsp;• {w}</p>",
+                        unsafe_allow_html=True,
+                    )
+
+            with col_metrics:
+                if metrics:
+                    st.markdown(
+                        "<p style='color:#FFB74D; font-weight:600; font-size:0.88rem;"
+                        " margin:0 0 0.4rem;'>📊 Image Metrics:</p>",
+                        unsafe_allow_html=True,
+                    )
+                    for label, val in [
+                        ("Size", metrics.get("dimensions", "N/A")),
+                        ("File", f"{metrics.get('file_size_mb','N/A')} MB"),
+                        ("Brightness", metrics.get("brightness", "N/A")),
+                        ("Contrast", metrics.get("contrast", "N/A")),
+                    ]:
+                        st.markdown(
+                            f"<p style='color:#FFCC80; font-size:0.83rem; margin:0.15rem 0;'>"
+                            f"&nbsp;&nbsp;<b>{label}:</b> {val}</p>",
+                            unsafe_allow_html=True,
+                        )
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # "Analysis will still run" notice
+            st.markdown(
+                """
+                <div style="
+                    background:rgba(255,152,0,0.12);
+                    border:1px dashed #FF9800;
+                    border-radius:8px;
+                    padding:0.6rem 1rem;
+                    margin-top:0.5rem;
+                    font-size:0.82rem; color:#FFB74D;
+                ">
+                    ℹ️ Analysis will proceed but accuracy may be reduced.
+                    For best results, retake the image in natural daylight with the leaf
+                    filling the frame. <b>All other tabs (Weather, Soil, Pest, Irrigation)
+                    are fully available.</b>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            return
+
+        # ── 3. ERROR / CRITICAL ─────────────────────────────────────────────
+        if severity in ("error", "critical"):
+            icon = "🔴" if severity == "critical" else "🟠"
+            header = (
+                "Critical Image Error — File Cannot Be Processed"
+                if severity == "critical"
+                else "Image Error — Crop Analysis Unavailable"
+            )
+            border_color = "#D32F2F" if severity == "critical" else "#F44336"
+            bg_color = "#3B0000" if severity == "critical" else "#2D0000"
+
+            st.markdown(
+                f"""
+                <div style="
+                    background: linear-gradient(135deg, {bg_color} 0%, #1a0000 100%);
+                    border: 1px solid {border_color};
+                    border-left: 6px solid {border_color};
+                    border-radius: 10px;
+                    padding: 1.1rem 1.4rem;
+                    margin: 0.8rem 0;
+                    box-shadow: 0 4px 16px rgba(211,47,47,0.3);
+                ">
+                    <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.8rem;">
+                        <span style="font-size:1.4rem;">{icon}</span>
+                        <span style="color:#EF9A9A; font-weight:700; font-size:1rem;">
+                            {header}
+                        </span>
+                        <span style="
+                            background:{border_color}; color:white;
+                            font-size:0.68rem; font-weight:700;
+                            padding:2px 8px; border-radius:20px; margin-left:auto;
+                            text-transform:uppercase; letter-spacing:0.5px;
+                        ">{severity.upper()}</span>
+                    </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Error list
+            for err in errors:
+                st.markdown(
+                    f"<p style='color:#FFCDD2; font-size:0.86rem; margin:0.25rem 0;'>"
+                    f"&nbsp;&nbsp;❌ {err}</p>",
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # Quality metrics in expander (keeps UI clean)
+            if metrics:
+                with st.expander("📊 View Image Diagnostics", expanded=False):
+                    cols = st.columns(min(len(metrics), 4))
+                    for idx, (key, val) in enumerate(metrics.items()):
+                        with cols[idx % len(cols)]:
+                            st.metric(key.replace("_", " ").title(), val)
+
+            # Fix suggestions
+            st.markdown(
+                """
+                <div style="
+                    background:rgba(255,87,34,0.10);
+                    border:1px dashed #FF5722;
+                    border-radius:8px;
+                    padding:0.8rem 1.1rem;
+                    margin-top:0.6rem;
+                ">
+                    <p style="color:#FF8A65; font-weight:600; font-size:0.88rem; margin:0 0 0.5rem;">
+                        💡 How to fix:
+                    </p>
+                    <p style="color:#FFCCBC; font-size:0.83rem; margin:0.2rem 0;">
+                        &nbsp;&nbsp;• Use JPG, JPEG, or PNG format only
+                    </p>
+                    <p style="color:#FFCCBC; font-size:0.83rem; margin:0.2rem 0;">
+                        &nbsp;&nbsp;• Keep file size under 15 MB
+                    </p>
+                    <p style="color:#FFCCBC; font-size:0.83rem; margin:0.2rem 0;">
+                        &nbsp;&nbsp;• Photograph leaf in natural daylight (avoid very dark/bright conditions)
+                    </p>
+                    <p style="color:#FFCCBC; font-size:0.83rem; margin:0.2rem 0;">
+                        &nbsp;&nbsp;• Ensure the image file is not corrupted
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # ⬇ KEY: always show "other tabs still available" notice
+            st.markdown(
+                """
+                <div style="
+                    background: linear-gradient(135deg, #0D2137 0%, #0A1929 100%);
+                    border: 1px solid #1565C0;
+                    border-left: 5px solid #1976D2;
+                    border-radius: 10px;
+                    padding: 0.9rem 1.2rem;
+                    margin-top: 0.8rem;
+                    box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+                ">
+                    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+                        <span style="font-size:1.2rem;">ℹ️</span>
+                        <span style="color:#90CAF9; font-weight:700; font-size:0.92rem;">
+                            Other Analyses Are Fully Available
+                        </span>
+                    </div>
+                    <p style="color:#BBDEFB; font-size:0.83rem; margin:0.2rem 0;">
+                        &nbsp;&nbsp;🌤️ <b>Weather & Soil</b> — View weather data and soil health analysis
+                    </p>
+                    <p style="color:#BBDEFB; font-size:0.83rem; margin:0.2rem 0;">
+                        &nbsp;&nbsp;🐛 <b>Pest Risk</b> — See pest risk levels for your crop
+                    </p>
+                    <p style="color:#BBDEFB; font-size:0.83rem; margin:0.2rem 0;">
+                        &nbsp;&nbsp;💧 <b>Irrigation</b> — Get irrigation recommendations
+                    </p>
+                    <p style="color:#BBDEFB; font-size:0.83rem; margin:0.2rem 0;">
+                        &nbsp;&nbsp;📊 <b>Dashboard</b> — Full farm summary
+                    </p>
+                    <p style="color:#90CAF9; font-size:0.81rem; margin-top:0.5rem; font-style:italic;">
+                        Click <b>ANALYZE ALL DATA</b> in the sidebar — crop image analysis will be skipped,
+                        but all other insights will be generated normally.
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    def assess_leaf_image(self, image_array):
+        """Assess whether the uploaded image is likely a crop leaf image.
+
+        Uses green-channel vegetation heuristics and texture checks to avoid
+        false positives on random non-crop photos.
+        """
+        # Ensure image array is normalized [0,1]
+        if image_array.max() > 1.0:
+            image_array = image_array / 255.0
+
+        # Color and vegetation mask
+        red = image_array[:, :, 0]
+        green = image_array[:, :, 1]
+        blue = image_array[:, :, 2]
+
+        # Green dominance: green should be stronger than red/blue in leaf regions
+        green_dominant = (green > red * 1.05) & (green > blue * 1.05) & (green > 0.18)
+        green_ratio = float(np.mean(green_dominant))
+
+        # Basic color saturation and brightness checks
+        max_rgb = np.max(image_array, axis=2)
+        min_rgb = np.min(image_array, axis=2)
+        saturation = np.mean((max_rgb - min_rgb) / (max_rgb + 1e-6))
+        brightness = np.mean(max_rgb)
+
+        # Texture (edges) as leaf shape proxy: variance of grayscale values
+        gray = np.mean(image_array, axis=2)
+        texture = np.var(gray)
+
+        # Composite leaf score
+        leaf_score = (
+            0.5 * green_ratio
+            + 0.25 * min(1.0, saturation * 2.0)
+            + 0.15 * min(1.0, texture * 120.0)
+            + 0.1 * min(1.0, brightness * 1.5)
+        )
+
+        # Validation criteria
+        if (
+            green_ratio < 0.08
+            or saturation < 0.12
+            or brightness < 0.1
+            or brightness > 0.95
+        ):
+            message = (
+                "Image likely not a clear crop leaf. Please upload a leaf/plant image with green foliage "
+                "in good natural lighting."
+            )
+            return False, float(leaf_score), message
+
+        if leaf_score < 0.28:
+            message = (
+                "Image appears to be either a non-leaf photo or too noisy/low quality for reliable analysis. "
+                "Please retake with a leaf occupying most of the frame."
+            )
+            return False, float(leaf_score), message
+
+        return (
+            True,
+            float(leaf_score),
+            (
+                "Leaf image validation passed. Green ratio: {:.2f}, quality: {:.2f}".format(
+                    green_ratio, leaf_score
+                )
+            ),
+        )
 
     def advanced_preprocessing_pipeline(self, image_array):
         """Advanced preprocessing for maximum accuracy"""
@@ -2072,6 +2556,10 @@ class MaharashtraAgriculturalSystem:
             crop_type, overall_risk, current_weather
         )
 
+        # Get treatment plans and spraying windows (HIGH PRIORITY)
+        treatment_plans = self.get_pest_treatment_plans(crop_type, overall_risk)
+        spraying_windows = self.get_optimal_spraying_windows(current_weather)
+
         return {
             "overall_risk": round(overall_risk, 1),
             "risk_factors": {
@@ -2098,6 +2586,8 @@ class MaharashtraAgriculturalSystem:
                 overall_risk, crop_type
             ),
             "risk_level": self.get_risk_level(overall_risk),
+            "treatment_plans": treatment_plans,
+            "spraying_windows": spraying_windows,
         }
 
     def calculate_temperature_risk(self, temperature):
@@ -2344,6 +2834,86 @@ class MaharashtraAgriculturalSystem:
             return {"level": "Low", "color": "#88DD88"}
         else:
             return {"level": "Very Low", "color": "#44BB44"}
+
+    def get_pest_treatment_plans(self, crop_type, riskScore):
+        """Get actionable treatment plans with products and pricing"""
+        treatments = {
+            "Cotton": {
+                "Bollworm": [
+                    {"product": "Chlorpyriphos 20%", "price": "279/L"},
+                    {"product": "Neem Oil", "price": "180/L"},
+                ],
+                "Aphids": [{"product": "Imidacloprid", "price": "350/L"}],
+            },
+            "Rice": {
+                "Brown Plant Hopper": [{"product": "Buprofezin", "price": "280/L"}]
+            },
+            "Tomato": {"Fruit Borer": [{"product": "Spinosad", "price": "280/L"}]},
+        }
+        severity = (
+            "Critical" if riskScore > 70 else "Moderate" if riskScore > 40 else "Low"
+        )
+        return {
+            "severity": severity,
+            "treatments": treatments.get(crop_type, {}),
+            "note": "Wear PPE",
+        }
+
+    def get_optimal_spraying_windows(self, weather):
+        """Get optimal spray timing"""
+        t = weather.get("temperature", 25)
+        w = weather.get("wind_speed", 2.5)
+        r = weather.get("rainfall", 0)
+
+        warnings = []
+        if r > 3:
+            warnings.append(f"Rain {r}mm - Skip")
+        if w > 3.5:
+            warnings.append(f"Wind {w}m/s - Wait")
+
+        windows = (
+            ["06-09 AM", "17-20 PM"]
+            if (15 <= t <= 32 and w <= 3.5 and r <= 3)
+            else ["Wait for better weather"]
+        )
+        return {"windows": windows, "warnings": warnings, "reapply": "7-10 days"}
+
+    def calculate_soil_moisture(self, soil_ph, daily_need, rainfall):
+        """Calculate soil moisture (0-100%)"""
+        rain_c = min(50, rainfall * 5)
+        retention = 0.9 if soil_ph > 7.5 else 0.8 if 5.5 <= soil_ph <= 7.5 else 0.6
+        demand = min(50, (daily_need / 10) * 10)
+        moisture = int((rain_c * retention + (50 - demand)) * 0.7)
+        moisture = max(10, min(95, moisture))
+
+        if moisture > 70:
+            status, action = "Very High", "Space irrigations"
+        elif moisture > 50:
+            status, action = "Adequate", "Continue"
+        elif moisture > 30:
+            status, action = "Low", "Water soon"
+        else:
+            status, action = "Critical", "Irrigate now"
+
+        return {"level": f"{moisture}%", "status": status, "action": action}
+
+    def get_rain_forecast_impact(self, expected_rain, daily_need):
+        """Analyze rain impact on irrigation"""
+        if expected_rain >= daily_need * 0.8:
+            return {
+                "recommendation": "Skip irrigation",
+                "reason": "Rain will meet needs",
+            }
+        elif expected_rain >= daily_need * 0.4:
+            return {
+                "recommendation": f"Reduce by {(daily_need-expected_rain):.1f}mm",
+                "reason": "Partial rain expected",
+            }
+        else:
+            return {
+                "recommendation": "Irrigate as planned",
+                "reason": "Insufficient rain",
+            }
 
     def generate_zone_risk_summary(self):
         """Generate comprehensive zone-wise risk summary"""
@@ -2627,6 +3197,12 @@ class MaharashtraAgriculturalSystem:
             "recommendations": self.generate_irrigation_recommendations(
                 zone, crop_type, growth_stage, final_daily_need
             ),
+            "soil_moisture": self.calculate_soil_moisture(
+                soil_ph, final_daily_need, current_weather.get("rainfall", 0)
+            ),
+            "rain_forecast_impact": self.get_rain_forecast_impact(
+                current_weather.get("rainfall", 0), final_daily_need
+            ),
         }
 
         return recommendations
@@ -2705,8 +3281,13 @@ class MaharashtraAgriculturalSystem:
     def save_analysis_data(self, data):
         """Save analysis data to MongoDB database"""
         # Check database connection
-        if not hasattr(self, "mongo_db") or not self.mongo_db:
-            st.error("Database connection not initialized")
+        if (
+            not hasattr(self, "mongo_db")
+            or not self.mongo_db
+            or not getattr(self.mongo_db, "connected", False)
+        ):
+            # do not spam error if user never asked to save
+            st.warning("Database connection unavailable; analysis will not be saved.")
             return False
 
         # Validate input data
@@ -3307,6 +3888,9 @@ def main():
 
     # Initialize system with error handling
     try:
+        # Initialize scheduler to keep app alive 24/7
+        init_scheduler()
+
         if "agri_system" not in st.session_state:
             st.session_state.agri_system = MaharashtraAgriculturalSystem()
 
@@ -3328,6 +3912,14 @@ def main():
         # Auth DB
         if "auth_db" not in st.session_state:
             st.session_state.auth_db = MongoFarmerAuth()
+            # notify user if mongodb connection was not established
+            if not getattr(st.session_state.auth_db, "connected", False):
+                st.warning(
+                    "⚠️ Unable to connect to MongoDB. The system is running in offline mode; "
+                    "authentication and data persistence features will be limited. "
+                    "Ensure the MONGODB_URI environment variable is set to a valid URI "
+                    "or verify network access to your database server."
+                )
         if "authenticated" not in st.session_state:
             st.session_state.authenticated = False
 
@@ -3569,6 +4161,14 @@ def main():
 
     # Sidebar - Farm Information
     with st.sidebar:
+        # Warn user if MongoDB is unavailable
+        if "auth_db" in st.session_state and not getattr(
+            st.session_state.auth_db, "connected", False
+        ):
+            st.error(
+                "🚫 MongoDB connection unavailable. "
+                "Some features (login/registration, history) are disabled."
+            )
         st.markdown("🏡 Smart Farm Dashboard")
         # Optional logout control (does not alter main UI)
         if st.session_state.authenticated:
@@ -3667,90 +4267,231 @@ def main():
         uploaded_file = st.file_uploader(
             "Upload Crop Image (Optional)",
             type=["jpg", "jpeg", "png"],
-            help="Upload crop image for disease detection",
+            help="Upload crop image for AI disease detection (optional — all other analyses run without it)",
             key="sidebar_image_upload",
         )
 
-        # Main analyze button
+        # ── Professional inline validation feedback in sidebar ──
+        _image_is_analysis_ready = True  # flag used in analyze button below
+
+        if uploaded_file:
+            image_validation = system.validate_image_file(uploaded_file)
+            _sev = image_validation.get("severity", "success")
+
+            if _sev in ("error", "critical"):
+                _image_is_analysis_ready = False
+                st.markdown(
+                    """
+                    <div style="
+                        background: linear-gradient(135deg,#3B0000,#1a0000);
+                        border:1px solid #F44336;
+                        border-left:5px solid #F44336;
+                        border-radius:9px;
+                        padding:0.75rem 0.9rem;
+                        margin:0.6rem 0;
+                    ">
+                        <p style="color:#EF9A9A; font-weight:700; font-size:0.88rem; margin:0 0 0.3rem;">
+                            🔴 Image Cannot Be Used for Crop Analysis
+                        </p>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                for err in image_validation.get("errors", []):
+                    st.markdown(
+                        f"<p style='color:#FFCDD2; font-size:0.8rem; margin:0.15rem 0;'>"
+                        f"❌ {err}</p>",
+                        unsafe_allow_html=True,
+                    )
+                st.markdown(
+                    """
+                        <hr style="border-color:#7f0000; margin:0.5rem 0;"/>
+                        <p style="color:#90CAF9; font-size:0.8rem; margin:0;">
+                            ✅ <b>All other analyses still run normally.</b><br>
+                            Weather · Soil · Pest Risk · Irrigation are unaffected.
+                        </p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            elif _sev == "warning":
+                st.markdown(
+                    """
+                    <div style="
+                        background:linear-gradient(135deg,#3D2000,#2A1500);
+                        border:1px solid #FF9800;
+                        border-left:4px solid #FF9800;
+                        border-radius:9px;
+                        padding:0.7rem 0.9rem;
+                        margin:0.6rem 0;
+                    ">
+                        <p style="color:#FFB74D; font-weight:700; font-size:0.86rem; margin:0 0 0.25rem;">
+                            ⚠️ Image Quality Warning
+                        </p>
+                        <p style="color:#FFCC80; font-size:0.8rem; margin:0 0 0.3rem;">
+                            Analysis will proceed with reduced accuracy.
+                        </p>
+                        <p style="color:#FFF3E0; font-size:0.79rem; margin:0;">
+                            ✅ All tabs (Weather, Soil, Pest, Irrigation) are fully available.
+                        </p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            else:  # success
+                st.markdown(
+                    """
+                    <div style="
+                        background:linear-gradient(135deg,#1B3A1F,#1B5E20);
+                        border:1px solid #4CAF50;
+                        border-left:4px solid #4CAF50;
+                        border-radius:9px;
+                        padding:0.6rem 0.9rem;
+                        margin:0.4rem 0;
+                    ">
+                        <p style="color:#A5D6A7; font-weight:600; font-size:0.85rem; margin:0;">
+                            ✅ Image ready for AI crop analysis
+                        </p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown(
+                """
+                <div style="
+                    background:rgba(25,118,210,0.10);
+                    border:1px dashed #1976D2;
+                    border-radius:8px;
+                    padding:0.65rem 0.9rem;
+                    margin:0.5rem 0;
+                ">
+                    <p style="color:#90CAF9; font-size:0.82rem; margin:0 0 0.25rem; font-weight:600;">
+                        💡 Image is optional
+                    </p>
+                    <p style="color:#BBDEFB; font-size:0.79rem; margin:0;">
+                        You can still get full Weather, Soil, Pest Risk &amp;
+                        Irrigation analysis without uploading a crop photo.
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
         if st.button(
             "🔍 ANALYZE ALL DATA",
             type="primary",
+            use_container_width=True,
             key="main_analyze_button",
-            help="Analyze crop health, weather, soil, and pest risk",
+            help="Analyze weather, soil, pest risk & irrigation — crop image is optional",
         ):
-            # Perform all analyses
             analyses = {}
 
-            # 1. Crop image analysis (if uploaded)
+            # ── 1. Crop image analysis (OPTIONAL — skip gracefully if invalid) ──
             if uploaded_file:
-                crop_result = system.analyze_crop_image(uploaded_file)
-                if crop_result:
-                    analyses["crop"] = crop_result
-                    st.session_state.crop_analysis = crop_result
+                # Re-validate so we don't analyse a broken file
+                _val = system.validate_image_file(uploaded_file)
+                if _val["severity"] not in ("error", "critical"):
+                    crop_result = system.analyze_crop_image(uploaded_file)
+                    if crop_result:
+                        analyses["crop"] = crop_result
+                        st.session_state.crop_analysis = crop_result
+                        if "error" in crop_result:
+                            # Non-blocking inline error inside the sidebar summary
+                            st.warning(f"⚠️ Crop analysis note: {crop_result['error']}")
+                else:
+                    # Image invalid — clear any stale crop result and inform user
+                    st.session_state.crop_analysis = None
+                    st.markdown(
+                        """
+                        <div style="
+                            background:linear-gradient(135deg,#3B0000,#1a0000);
+                            border:1px solid #F44336; border-left:5px solid #F44336;
+                            border-radius:9px; padding:0.75rem 1rem; margin:0.5rem 0;
+                        ">
+                            <p style="color:#EF9A9A; font-weight:700; font-size:0.88rem; margin:0 0 0.25rem;">
+                                🔴 Crop Image Skipped
+                            </p>
+                            <p style="color:#FFCDD2; font-size:0.81rem; margin:0;">
+                                The uploaded image has validation errors and was excluded from analysis.
+                                All other analyses below will run normally.
+                            </p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+            # (if no image uploaded, crop analysis simply doesn't run — no error shown)
 
-            # 2. Soil analysis
+            # ── 2. Soil analysis — ALWAYS runs ────────────────────────────────
             soil_result = system.analyze_soil_health(
                 soil_ph, nitrogen, phosphorus, potassium, farm_area
             )
             analyses["soil"] = soil_result
             st.session_state.soil_analysis = soil_result
 
-            # 3. Pest risk analysis
+            # ── 3. Pest risk — ALWAYS runs ─────────────────────────────────────
             pest_result = system.analyze_pest_risk(
                 weather_data, crop_type, growth_stage
             )
             analyses["pest"] = pest_result
             st.session_state.pest_analysis = pest_result
 
-            # 4. Irrigation analysis
+            # ── 4. Irrigation — ALWAYS runs ────────────────────────────────────
             irrigation_result = system.get_irrigation_recommendations(
                 crop_type, district, growth_stage, soil_ph, farm_area, current_weather
             )
             analyses["irrigation"] = irrigation_result
             st.session_state.irrigation_analysis = irrigation_result
 
-            # 5. Save comprehensive analysis
+            # ── 5. Persist to DB ───────────────────────────────────────────────
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             disease_detected = analyses.get("crop", {}).get(
                 "disease", "No image uploaded"
             )
             confidence = analyses.get("crop", {}).get("confidence", 0)
-            ndvi_val = system.calculate_ndvi(0.8, 0.3)  # Default NDVI
+            ndvi_val = system.calculate_ndvi(0.8, 0.3)
 
-            analysis_data = (
-                timestamp,
-                district,
-                crop_type,
-                growth_stage,
-                farm_area,
-                disease_detected,
-                confidence,
-                ndvi_val,
-                soil_ph,
-                nitrogen,
-                phosphorus,
-                potassium,
-                "Comprehensive analysis completed",
+            system.save_analysis_data(
+                (
+                    timestamp,
+                    district,
+                    crop_type,
+                    growth_stage,
+                    farm_area,
+                    disease_detected,
+                    confidence,
+                    ndvi_val,
+                    soil_ph,
+                    nitrogen,
+                    phosphorus,
+                    potassium,
+                    "Comprehensive analysis completed",
+                )
             )
 
-            system.save_analysis_data(analysis_data)
+            st.success("✅ Analysis complete! Check all tabs for results.")
 
-            st.success("✅ Complete analysis finished! Check all tabs for results.")
-
-            # Show quick summary
-            st.markdown("#### Quick Summary:")
+            # ── 6. Quick summary ───────────────────────────────────────────────
+            st.markdown("#### 📋 Quick Summary")
             if "crop" in analyses:
                 st.write(
-                    f"🌿 Crop: {analyses['crop']['disease']} ({analyses['crop']['confidence']:.1f}% confidence)"
+                    f"🌿 Crop: {analyses['crop']['disease']} "
+                    f"({analyses['crop']['confidence']:.1f}% confidence)"
                 )
+            else:
+                st.info("🌿 Crop analysis: not run (no valid image uploaded)")
+
             st.write(
                 f"🧪 Soil Health: {analyses['soil']['score']}/100 ({analyses['soil']['status']})"
             )
             st.write(
-                f"🐛 Pest Risk: {analyses['pest']['overall_risk']}/100 ({analyses['pest']['risk_level']['level']})"
+                f"🐛 Pest Risk: {analyses['pest']['overall_risk']}/100 "
+                f"({analyses['pest']['risk_level']['level']})"
             )
             st.write(
-                f"💧 Irrigation: {analyses['irrigation']['daily_water_requirement']:.1f} mm/day ({analyses['irrigation']['irrigation_frequency']})"
+                f"💧 Irrigation: {analyses['irrigation']['daily_water_requirement']:.1f} mm/day "
+                f"({analyses['irrigation']['irrigation_frequency']})"
             )
             st.write(f"💰 Fertilizer Cost: ₹{analyses['soil']['total_cost']:.2f}")
 
@@ -3769,6 +4510,33 @@ def main():
             )
         except Exception as _e:
             pass
+
+        # Scheduler Monitoring Section
+        st.markdown("---")
+        with st.expander("⚙️ System Status & Scheduler", expanded=False):
+            scheduler = get_scheduler()
+            status = scheduler.get_job_status()
+
+            # Display scheduler status
+            if status["scheduler_running"]:
+                st.success(
+                    f"✅ **App Active & Running 24/7** | "
+                    f"{status['jobs_scheduled']} background jobs"
+                )
+            else:
+                st.warning("⏸️ Scheduler inactive")
+
+            # Show next scheduled jobs
+            if status["next_jobs"]:
+                st.subheader("📅 Next Scheduled Tasks")
+                for job in status["next_jobs"][:5]:
+                    st.write(f"**{job['name']}** — {job['next_run']}")
+
+            # Show recent job results
+            if status["job_details"]:
+                st.subheader("📊 Recent Activity")
+                for job_name, job_result in status["job_details"].items():
+                    st.write(f"• {job_name}: {job_result}")
 
     # Main Navigation Tabs
     tab_names = [
@@ -3794,12 +4562,17 @@ def main():
             and st.session_state.crop_analysis is not None
         ):
             result = st.session_state.crop_analysis
-            confidence = result["confidence"]
-            disease = result["disease"]
+            if isinstance(result, dict) and "error" in result:
+                st.warning(
+                    f"⚠️ {result.get('error', 'Invalid crop image uploaded. Please upload a valid leaf image.')}."
+                )
+            else:
+                confidence = result.get("confidence", 0)
+                disease = result.get("disease", "Unknown")
 
-            if "healthy" in disease.lower():
-                st.markdown(
-                    f"""
+                if "healthy" in disease.lower():
+                    st.markdown(
+                        f"""
         <div style="
             background: linear-gradient(135deg, #43A047 0%, #66BB6A 100%);
             padding: 1.8rem;
@@ -3819,21 +4592,21 @@ def main():
             </p>
         </div>
     """,
-                    unsafe_allow_html=True,
-                )
-            else:
-                severity = (
-                    "HIGH"
-                    if confidence > 80
-                    else "MEDIUM" if confidence > 60 else "LOW"
-                )
-                alert_color = (
-                    "#F44336"
-                    if confidence > 80
-                    else "#FF9800" if confidence > 60 else "#2196F3"
-                )
-                st.markdown(
-                    f"""
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    severity = (
+                        "HIGH"
+                        if confidence > 80
+                        else "MEDIUM" if confidence > 60 else "LOW"
+                    )
+                    alert_color = (
+                        "#F44336"
+                        if confidence > 80
+                        else "#FF9800" if confidence > 60 else "#2196F3"
+                    )
+                    st.markdown(
+                        f"""
                 <div style="
                     background: linear-gradient(135deg, {alert_color} 0%, #D32F2F 100%);
                     padding: 1.5rem;
@@ -3849,8 +4622,8 @@ def main():
                     <p style="margin: 4px 0 0; font-size: 16px;">📋 Treatment recommendations available below</p>
                 </div>
                 """,
-                    unsafe_allow_html=True,
-                )
+                        unsafe_allow_html=True,
+                    )
 
         # Main Content Area
         col1, col2 = st.columns([1.2, 1])
@@ -3889,74 +4662,141 @@ def main():
             st.markdown("</div>", unsafe_allow_html=True)
 
             if uploaded_file:
-                # Image preview with analysis info
-                col_img, col_info = st.columns([1, 1])
-                with col_img:
-                    st.image(uploaded_file, caption="📸 Uploaded Image", width=300)
+                # ── Step 1: Professional validation alert ──────────────────
+                validation_result = system.validate_image_file(uploaded_file)
+                system.display_professional_image_alert(validation_result)
 
-                with col_info:
-                    # Image quality assessment
-                    image = Image.open(uploaded_file)
-                    img_array = np.array(image)
+                _can_analyze = validation_result["severity"] not in (
+                    "error",
+                    "critical",
+                )
 
-                    st.markdown("#### 📊 Image Analysis Info")
-                    st.metric("Image Size", f"{image.size[0]} x {image.size[1]}")
-                    st.metric(
-                        "File Size", f"{len(uploaded_file.getvalue()) / 1024:.1f} KB"
-                    )
+                if _can_analyze:
+                    # Show image preview + quality info
+                    col_img, col_info = st.columns([1, 1])
+                    with col_img:
+                        st.image(uploaded_file, caption="📸 Uploaded Image", width=300)
+                    with col_info:
+                        st.markdown("#### 📊 Image Properties")
+                        m = validation_result["quality_metrics"]
+                        if m:
+                            st.markdown("**File Properties:**")
+                            st.markdown(
+                                f"• **Dimensions:** {m.get('dimensions', 'N/A')}"
+                            )
+                            st.markdown(
+                                f"• **Size:** {m.get('file_size_mb', 'N/A')} MB"
+                            )
+                            st.markdown(f"• **Format:** {m.get('format', 'N/A')}")
+                            st.markdown("**Quality Metrics:**")
+                            brightness = m.get("brightness", 0.5)
+                            contrast = m.get("contrast", 0.1)
+                            b_status = (
+                                "✓ Good"
+                                if 0.15 < brightness < 0.85
+                                else "⚠ Needs Improvement"
+                            )
+                            c_status = "✓ Good" if contrast > 0.02 else "⚠ Low Contrast"
+                            st.markdown(
+                                f"• **Brightness:** {brightness:.3f} — {b_status}"
+                            )
+                            st.markdown(f"• **Contrast:** {contrast:.3f} — {c_status}")
 
-                    # Basic quality indicators
-                    brightness = np.mean(img_array) / 255
-                    quality_score = (
-                        "Excellent"
-                        if brightness > 0.3 and brightness < 0.8
-                        else "Good" if brightness > 0.2 and brightness < 0.9 else "Fair"
-                    )
-                    quality_color = (
-                        "#4CAF50"
-                        if quality_score == "Excellent"
-                        else "#FF9800" if quality_score == "Good" else "#F44336"
-                    )
+                    # Analyze button (enabled only for valid/warning images)
+                    if st.button(
+                        "🔬 AI CROP HEALTH ANALYSIS",
+                        type="primary",
+                        key="analyze_crop_button",
+                        help="Advanced AI analysis using deep learning models",
+                    ):
+                        with st.spinner("🧠 AI is analysing your crop image…"):
+                            progress_bar = st.progress(0)
+                            for i in range(100):
+                                progress_bar.progress(i + 1)
+                                if i == 25:
+                                    st.info("🔍 Preprocessing image…")
+                                elif i == 50:
+                                    st.info("🧬 Detecting disease patterns…")
+                                elif i == 75:
+                                    st.info("📊 Calculating confidence scores…")
 
+                            analysis_result = system.analyze_crop_image(uploaded_file)
+                            progress_bar.empty()
+
+                            if analysis_result:
+                                st.session_state.crop_analysis = analysis_result
+                                if "error" in analysis_result:
+                                    st.error(analysis_result["error"])
+                                else:
+                                    st.success("✅ AI Analysis completed successfully!")
+                                st.rerun()
+
+                else:
+                    # ── Invalid image: show actionable panel, DO NOT block tabs ──
                     st.markdown(
-                        f'<div style="color: {quality_color}; font-weight: bold;">📈 Quality: {quality_score}</div>',
+                        """
+                        <div style="
+                            background: linear-gradient(135deg, #1C1C1C 0%, #121212 100%);
+                            border: 1px solid #424242;
+                            border-radius: 14px;
+                            padding: 1.4rem 1.6rem;
+                            margin: 1rem 0;
+                            text-align: center;
+                        ">
+                            <p style="font-size:2.5rem; margin:0 0 0.5rem;">🖼️</p>
+                            <p style="color:#EF9A9A; font-weight:700; font-size:1rem; margin:0 0 0.4rem;">
+                                Crop Analysis Unavailable
+                            </p>
+                            <p style="color:#BDBDBD; font-size:0.85rem; margin:0 0 1rem;">
+                                The uploaded image could not be processed for disease detection.
+                                Please retake the photo and re-upload.
+                            </p>
+                            <p style="color:#90CAF9; font-size:0.83rem; margin:0;">
+                                👉 You can still use <b>Weather &amp; Soil</b>, <b>Pest Risk</b>,
+                                <b>Irrigation</b>, and <b>Dashboard</b> tabs above for full farm insights.
+                            </p>
+                        </div>
+                        """,
                         unsafe_allow_html=True,
                     )
 
-                # Enhanced analyze button with progress indication
-                st.markdown(
-                    '<div style="text-align: center; margin: 25px 0;">',
-                    unsafe_allow_html=True,
-                )
-                if st.button(
-                    "🔬 AI CROP HEALTH ANALYSIS",
-                    type="primary",
-                    key="analyze_crop_button",
-                    help="Advanced AI analysis using deep learning models",
-                ):
-                    with st.spinner("🧠 AI is analyzing your crop image..."):
-                        progress_bar = st.progress(0)
-                        for i in range(100):
-                            progress_bar.progress(i + 1)
-                            if i == 25:
-                                st.info("🔍 Preprocessing image...")
-                            elif i == 50:
-                                st.info("🧬 Detecting disease patterns...")
-                            elif i == 75:
-                                st.info("📊 Calculating confidence scores...")
-
-                        analysis_result = system.analyze_crop_image(uploaded_file)
-                        progress_bar.empty()
-
-                        if analysis_result:
-                            st.session_state.crop_analysis = analysis_result
-                            st.success("✅ AI Analysis completed successfully!")
-                            st.rerun()  # Refresh to show results
-                st.markdown("</div>", unsafe_allow_html=True)
-
             else:
-                st.info(
-                    "💡 Upload a clear crop image for AI-powered disease detection and analysis."
+                # No image uploaded — animated placeholder
+                st.markdown(
+                    """
+                    <style>
+                        @keyframes pulse-glow {
+                            0%, 100% { box-shadow: 0 0 10px rgba(76,175,80,0.3); transform: scale(1); }
+                            50%       { box-shadow: 0 0 22px rgba(76,175,80,0.6); transform: scale(1.01); }
+                        }
+                        @keyframes float-up {
+                            0%, 100% { transform: translateY(0px); }
+                            50%       { transform: translateY(-8px); }
+                        }
+                        @keyframes fade-in-out {
+                            0%, 100% { opacity:0.7; }
+                            50%       { opacity:1; }
+                        }
+                        .upload-placeholder {
+                            background: linear-gradient(135deg,rgba(76,175,80,0.08),rgba(102,187,106,0.08));
+                            border: 3px solid rgba(76,175,80,0.4);
+                            border-radius: 18px;
+                            padding: 2.5rem 2rem;
+                            text-align: center;
+                            animation: pulse-glow 2.5s ease-in-out infinite;
+                            margin: 1.5rem 0;
+                        }
+                        .upload-icon  { font-size:3.5rem; animation:float-up 2.5s ease-in-out infinite; display:inline-block; margin-bottom:0.8rem; }
+                        .upload-text  { font-size:1.25rem; font-weight:500; color:#4CAF50; margin:0.8rem 0; }
+                        .upload-sub   { font-size:0.95rem; color:#66BB6A; opacity:0.9; margin-top:0.6rem; animation:fade-in-out 2.5s ease-in-out infinite; }
+                    </style>
+                    <div class="upload-placeholder">
+                        <div class="upload-icon">📸</div>
+                        <div class="upload-text">Upload a crop leaf image for AI disease detection</div>
+                        <div class="upload-sub">JPG / JPEG / PNG · Max 15 MB · Natural daylight recommended</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
                 )
 
         with col2:
@@ -4127,6 +4967,15 @@ def main():
             and st.session_state.crop_analysis is not None
         ):
             result = st.session_state.crop_analysis
+
+            if "error" in result:
+                st.error(
+                    result.get(
+                        "error",
+                        "Invalid image: please upload a valid crop leaf image for analysis.",
+                    )
+                )
+                st.stop()
 
             st.markdown("---")
             st.markdown(

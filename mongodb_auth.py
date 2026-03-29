@@ -30,6 +30,20 @@ class MongoFarmerAuth:
             self.login_attempts = None
             self.preferences = None
             print("[WARNING] MongoDB Authentication System - Running in offline mode!")
+            # prepare offline user store
+            self.offline_auth_file = os.getenv('OFFLINE_AUTH_FILE', 'offline_auth.json')
+            try:
+                if not os.path.exists(self.offline_auth_file):
+                    with open(self.offline_auth_file, 'w', encoding='utf-8') as f:
+                        import json
+                        json.dump({'users': []}, f)
+                with open(self.offline_auth_file, 'r', encoding='utf-8') as f:
+                    import json
+                    data = json.load(f)
+                    self.offline_users = data.get('users', [])
+            except Exception as ex:
+                print(f"[ERROR] unable to initialize offline auth store: {ex}")
+                self.offline_users = []
     
     def _create_indexes(self):
         """Create necessary indexes for collections"""
@@ -63,7 +77,37 @@ class MongoFarmerAuth:
     def register_farmer(self, username, email, password, full_name, **kwargs):
         """Register a new farmer account"""
         if not self.connected:
-            return {"success": False, "message": "Database connection unavailable. Please try again later."}
+            # operate offline: store user locally in JSON file
+            if any(u['username'] == username or u['email'] == email for u in self.offline_users):
+                return {"success": False, "message": "Username or email already exists (offline)"}
+            password_hash, salt = self.hash_password(password)
+            farmer_doc = {
+                'username': username,
+                'email': email,
+                'password_hash': password_hash,
+                'salt': salt,
+                'full_name': full_name,
+                'phone': kwargs.get('phone', ''),
+                'farm_name': kwargs.get('farm_name', ''),
+                'district': kwargs.get('district', ''),
+                'village': kwargs.get('village', ''),
+                'farm_area': kwargs.get('farm_area', 0),
+                'crop_types': kwargs.get('crop_types', ''),
+                'registration_date': datetime.now(),
+                'last_login': None,
+                'is_active': True,
+                'profile_picture': kwargs.get('profile_picture', ''),
+                'created_at': datetime.now(),
+                'updated_at': datetime.now()
+            }
+            self.offline_users.append(farmer_doc)
+            try:
+                import json
+                with open(self.offline_auth_file, 'w', encoding='utf-8') as f:
+                    json.dump({'users': self.offline_users}, f, default=str)
+            except Exception as ex:
+                print(f"[ERROR] saving offline user: {ex}")
+            return {"success": True, "message": "Farmer registered offline!", "farmer_id": None}
         try:
             # Check if username or email exists
             if self.farmers.find_one({'$or': [{'username': username}, {'email': email}]}):
@@ -123,7 +167,13 @@ class MongoFarmerAuth:
     def authenticate_farmer(self, username, password, ip_address=None):
         """Authenticate farmer login"""
         if not self.connected:
-            return {"success": False, "message": "Database connection unavailable. Please try again later."}
+            # offline authentication
+            farmer = next((u for u in self.offline_users if u['username'] == username or u['email'] == username), None)
+            if not farmer:
+                return {"success": False, "message": "Invalid username or password (offline)"}
+            if not self.verify_password(password, farmer['password_hash']):
+                return {"success": False, "message": "Invalid username or password (offline)"}
+            return {"success": True, "message": "Login successful (offline)!", "farmer_id": None, "username": farmer['username'], "full_name": farmer['full_name']}
         try:
             # Get farmer record
             farmer = self.farmers.find_one({
