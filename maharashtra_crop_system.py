@@ -6055,7 +6055,7 @@ def main():
                 )
 
             fert_df_display = pd.DataFrame(fert_table_data)
-            st.dataframe(fert_df_display, width="stretch")
+            st.dataframe(fert_df_display, use_container_width=True)
 
     # Pest Risk Tab
     with tabs[2]:
