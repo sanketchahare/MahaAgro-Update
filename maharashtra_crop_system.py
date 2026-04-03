@@ -16,7 +16,11 @@ import shutil
 import streamlit as st
 import pandas as pd
 import numpy as np
-import tensorflow as tf
+try:
+    import tensorflow as tf
+    TF_AVAILABLE = True
+except ImportError:
+    TF_AVAILABLE = False
 import requests
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -209,9 +213,10 @@ except Exception as e:
     client = None
     db = None
 
-# Configure tensorflow to avoid memory issues
-tf.config.threading.set_inter_op_parallelism_threads(1)
-tf.config.threading.set_intra_op_parallelism_threads(1)
+# Configure tensorflow to avoid memory issues (only if available)
+if TF_AVAILABLE:
+    tf.config.threading.set_inter_op_parallelism_threads(1)
+    tf.config.threading.set_intra_op_parallelism_threads(1)
 
 # Suppress plotly warnings
 warnings.filterwarnings("ignore", message=".*keyword arguments.*")
@@ -753,31 +758,27 @@ class MaharashtraAgriculturalSystem:
         Falls back to default class names if files not found.
         """
         try:
-            if os.path.exists("best_model.h5"):
+            # Try to load model if TensorFlow is available
+            if TF_AVAILABLE and os.path.exists("best_model.h5"):
                 self.disease_model = tf.keras.models.load_model("best_model.h5")
                 logger.info("Disease detection model loaded successfully")
-
-                if os.path.exists("class_names.txt"):
-                    with open("class_names.txt", "r") as f:
-                        self.class_names = [line.strip() for line in f.readlines()]
-                    logger.info(f"Loaded {len(self.class_names)} class names")
-                else:
-                    self.class_names = [
-                        "Healthy",
-                        "Early_Blight",
-                        "Late_Blight",
-                        "Bacterial_Spot",
-                    ]
-                    logger.warning("Using default class names")
             else:
+                logger.warning("Model not available - using ML predictions without deep learning")
                 self.disease_model = None
+
+            # Load class names from file or use defaults
+            if os.path.exists("class_names.txt"):
+                with open("class_names.txt", "r") as f:
+                    self.class_names = [line.strip() for line in f.readlines()]
+                logger.info(f"Loaded {len(self.class_names)} class names")
+            else:
                 self.class_names = [
                     "Healthy",
                     "Early_Blight",
                     "Late_Blight",
                     "Bacterial_Spot",
                 ]
-                logger.warning("Model file not found. Using fallback class names.")
+                logger.warning("Using default class names")
         except Exception as e:
             logger.error(f"Error loading models: {e}")
             self.disease_model = None
