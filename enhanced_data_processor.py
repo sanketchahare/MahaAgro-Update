@@ -13,6 +13,7 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, mean_squared_error
 import warnings
+import os
 warnings.filterwarnings('ignore')
 
 class EnhancedDataProcessor:
@@ -23,20 +24,24 @@ class EnhancedDataProcessor:
         self.scalers = {}
         self.encoders = {}
         self.feature_importances = {}
+        self.script_dir = os.path.dirname(os.path.abspath(__file__))
         
     def load_all_datasets(self):
         """Load all CSV datasets into memory for processing"""
         try:
             # Load main agricultural dataset with remote sensing data
-            self.datasets['agriculture'] = pd.read_csv('agriculture_dataset.csv')
+            agri_path = os.path.join(self.script_dir, 'agriculture_dataset.csv')
+            self.datasets['agriculture'] = pd.read_csv(agri_path)
             print(f"✅ Loaded agriculture dataset: {len(self.datasets['agriculture'])} records")
             
             # Load crop and fertilizer recommendations
-            self.datasets['crop_fertilizer'] = pd.read_csv('Crop and fertilizer dataset.csv')
+            fert_path = os.path.join(self.script_dir, 'Crop and fertilizer dataset.csv')
+            self.datasets['crop_fertilizer'] = pd.read_csv(fert_path)
             print(f"✅ Loaded crop-fertilizer dataset: {len(self.datasets['crop_fertilizer'])} records")
             
             # Load enhanced crop recommendations
-            self.datasets['crop_recommendation'] = pd.read_csv('Crop_recommendationV2.csv')
+            crop_path = os.path.join(self.script_dir, 'Crop_recommendationV2.csv')
+            self.datasets['crop_recommendation'] = pd.read_csv(crop_path)
             print(f"✅ Loaded crop recommendation V2: {len(self.datasets['crop_recommendation'])} records")
             
             # Load weather data

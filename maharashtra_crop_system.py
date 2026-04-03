@@ -104,14 +104,15 @@ def download_file(url: str, filename: str) -> None:
 # If you keep large assets on Google Drive (recommended), download them into
 # a local deployment folder so they are not tracked in git. Adjust these
 # links as needed. These are safe no-op downloads if files already exist.
+script_dir = os.path.dirname(os.path.abspath(__file__))
 download_file(
     "https://drive.google.com/uc?export=download&id=1gYrPlQFe9vJUA2lefT4t16u2Odka32Ze",
-    "maharashtra_agri_deployment/data/agriculture_dataset.csv",
+    os.path.join(script_dir, "maharashtra_agri_deployment", "data", "agriculture_dataset.csv"),
 )
 
 download_file(
     "https://drive.google.com/uc?export=download&id=1ZNYqalYl1uATPF2g_bf9bgBcKtm2rbg8",
-    "maharashtra_agri_deployment/models/fertilizer_prediction_model.pkl",
+    os.path.join(script_dir, "maharashtra_agri_deployment", "models", "fertilizer_prediction_model.pkl"),
 )
 
 
@@ -125,9 +126,9 @@ def load_model():
     - If neither exists, try the original huggingface URL as a last resort
     """
     preferred = os.path.join(
-        "maharashtra_agri_deployment", "models", "fertilizer_prediction_model.pkl"
+        script_dir, "maharashtra_agri_deployment", "models", "fertilizer_prediction_model.pkl"
     )
-    fallback = "fertilizer_prediction_model.pkl"
+    fallback = os.path.join(script_dir, "fertilizer_prediction_model.pkl")
     model_path = preferred if os.path.exists(preferred) else fallback
 
     if not os.path.exists(model_path):
@@ -4625,6 +4626,57 @@ def main():
                         unsafe_allow_html=True,
                     )
 
+        # --- Professional Chatbot Integration in Sidebar ---
+        import openrouter_chat
+
+        with st.sidebar:
+            st.markdown("---")
+            st.markdown(
+                "<div style='text-align:center;'><b>🤖 MahaAgroAI Chat Assistant</b></div>",
+                unsafe_allow_html=True,
+            )
+            if "chat_history" not in st.session_state:
+                st.session_state["chat_history"] = []
+            user_input = st.text_area(
+                "Ask MahaAgroAI (English only):", "", key="chatbot_input", height=60
+            )
+            if st.button("Send", key="chatbot_send_btn"):
+                if user_input.strip():
+                    with st.spinner("MahaAgroAI is typing..."):
+                        reply = openrouter_chat.chat_with_openrouter(
+                            user_input, st.session_state["chat_history"]
+                        )
+                    # if something went wrong the module returns a string
+                    # starting with "Error:"; show that to the user instead of
+                    # adding it to the normal history.
+                    if reply.startswith("Error:"):
+                        st.error(reply)
+                    else:
+                        st.session_state["chat_history"].append(
+                            {"role": "user", "content": user_input}
+                        )
+                        st.session_state["chat_history"].append(
+                            {"role": "assistant", "content": reply}
+                        )
+            # Display chat history
+            if st.session_state["chat_history"]:
+                st.markdown(
+                    "<div style='max-height:250px;overflow-y:auto;background:#f8f9fa;padding:10px;border-radius:8px;margin-top:10px;'>",
+                    unsafe_allow_html=True,
+                )
+                for msg in st.session_state["chat_history"][-8:]:
+                    if msg["role"] == "user":
+                        st.markdown(
+                            f"<div style='color:#1976d2;'><b>You:</b> {msg['content']}</div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(
+                            f"<div style='color:#388e3c;'><b>MahaAgroAI:</b> {msg['content']}</div>",
+                            unsafe_allow_html=True,
+                        )
+                st.markdown("</div>", unsafe_allow_html=True)
+
         # Main Content Area
         col1, col2 = st.columns([1.2, 1])
 
@@ -4660,6 +4712,54 @@ def main():
                 key="crop_image_uploader",
             )
             st.markdown("</div>", unsafe_allow_html=True)
+
+            # Professional warning banner when no image is uploaded
+            if not uploaded_file:
+                st.markdown(
+                    """
+                    <div style="
+                        background: linear-gradient(135deg, #FF6F00 0%, #F57C00 100%);
+                        border: 3px solid #E65100;
+                        border-radius: 15px;
+                        padding: 2rem;
+                        text-align: center;
+                        color: white;
+                        margin: 1.5rem 0;
+                        box-shadow: 0 8px 25px rgba(255, 111, 0, 0.4);
+                        animation: pulse 2s ease-in-out infinite;
+                    ">
+                        <style>
+                            @keyframes pulse {
+                                0%, 100% { transform: scale(1); opacity: 1; }
+                                50% { transform: scale(1.02); opacity: 0.95; }
+                            }
+                        </style>
+                        <div style="font-size: 4rem; margin-bottom: 1rem; animation: bounce 1s ease-in-out;">⚠️</div>
+                        <h2 style="margin: 0 0 1rem; font-size: 28px; font-weight: 700; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);">
+                            Please upload a valid crop leaf image for accurate disease detection
+                        </h2>
+                        <div style="
+                            background: rgba(255,255,255,0.2);
+                            border-radius: 12px;
+                            padding: 1.5rem;
+                            margin: 1.5rem 0;
+                            border: 2px solid rgba(255,255,255,0.3);
+                        ">
+                            <h4 style="margin: 0 0 1rem; color: #FFE082; font-size: 18px;">📋 For Best Results:</h4>
+                            <div style="text-align: left; display: inline-block;">
+                                <p style="margin: 0.5rem 0; font-size: 16px;">• 📸 Take clear photos in natural daylight</p>
+                                <p style="margin: 0.5rem 0; font-size: 16px;">• 🌿 Focus on leaf surfaces and affected areas</p>
+                                <p style="margin: 0.5rem 0; font-size: 16px;">• 📏 Fill most of the frame with the leaf</p>
+                                <p style="margin: 0.5rem 0; font-size: 16px;">• 🚫 Avoid blurry, dark, or overexposed images</p>
+                            </div>
+                        </div>
+                        <p style="margin: 1.5rem 0 0; font-size: 16px; opacity: 0.9; font-style: italic;">
+                            💡 You can explore other features like Weather, Soil Analysis, and Pest Risk while preparing your image
+                        </p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
             if uploaded_file:
                 # ── Step 1: Professional validation alert ──────────────────
@@ -4975,7 +5075,8 @@ def main():
                         "Invalid image: please upload a valid crop leaf image for analysis.",
                     )
                 )
-                st.stop()
+                # Removed st.stop() to allow access to other tabs even when crop analysis fails
+                st.info("💡 You can still explore other features like Weather Analysis, Soil Health, and Pest Risk assessment in the tabs above.")
 
             st.markdown("---")
             st.markdown(
@@ -7809,57 +7910,6 @@ def main():
                         st.markdown(f"- {fert['type']}: {fert['quantity']} kg")
             else:
                 st.info("Run soil analysis to see fertilizer costs")
-
-    # --- Professional Chatbot Integration in Sidebar ---
-    import openrouter_chat
-
-    with st.sidebar:
-        st.markdown("---")
-        st.markdown(
-            "<div style='text-align:center;'><b>🤖 MahaAgroAI Chat Assistant</b></div>",
-            unsafe_allow_html=True,
-        )
-        if "chat_history" not in st.session_state:
-            st.session_state["chat_history"] = []
-        user_input = st.text_area(
-            "Ask MahaAgroAI (English only):", "", key="chatbot_input", height=60
-        )
-        if st.button("Send", key="chatbot_send_btn"):
-            if user_input.strip():
-                with st.spinner("MahaAgroAI is typing..."):
-                    reply = openrouter_chat.chat_with_openrouter(
-                        user_input, st.session_state["chat_history"]
-                    )
-                # if something went wrong the module returns a string
-                # starting with "Error:"; show that to the user instead of
-                # adding it to the normal history.
-                if reply.startswith("Error:"):
-                    st.error(reply)
-                else:
-                    st.session_state["chat_history"].append(
-                        {"role": "user", "content": user_input}
-                    )
-                    st.session_state["chat_history"].append(
-                        {"role": "assistant", "content": reply}
-                    )
-        # Display chat history
-        if st.session_state["chat_history"]:
-            st.markdown(
-                "<div style='max-height:250px;overflow-y:auto;background:#f8f9fa;padding:10px;border-radius:8px;margin-top:10px;'>",
-                unsafe_allow_html=True,
-            )
-            for msg in st.session_state["chat_history"][-8:]:
-                if msg["role"] == "user":
-                    st.markdown(
-                        f"<div style='color:#1976d2;'><b>You:</b> {msg['content']}</div>",
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown(
-                        f"<div style='color:#388e3c;'><b>MahaAgroAI:</b> {msg['content']}</div>",
-                        unsafe_allow_html=True,
-                    )
-            st.markdown("</div>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":

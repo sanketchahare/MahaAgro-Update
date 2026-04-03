@@ -48,6 +48,98 @@ saved_model/
 
 # Large Datasets (critical!)
 *.csv
+*.db
+*.sqlite
+*.sqlite3
+
+# Deployment directories (downloaded at runtime)
+maharashtra_agri_deployment/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+database/
+data/
+
+# Model checkpoints and large files
+checkpoints/
+models/
+datasets/
+
+# Firebase service account keys
+serviceAccountKey.json
+firebase-key.json
+
+# API keys and secrets
+secrets/
+config/secrets/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Streamlit config
+.streamlit/secrets.toml
+
+# Node modules (if any)
+node_modules/
+
+# Build and distribution
+build/
+dist/
+*.egg-info/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Large data files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Backup files
+*.bak
+*.backup
+*~
 *.xlsx
 *.xls
 Fertilizer*.csv

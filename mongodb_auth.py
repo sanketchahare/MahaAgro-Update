@@ -4,6 +4,8 @@ MongoDB-based Farmer Authentication System
 Secure user management system for Maharashtra Agricultural System
 """
 
+import os
+import json
 from mongodb_config import MongoCropDB
 import bcrypt
 import secrets
