@@ -13,3 +13,4 @@ bcrypt
 google-generativeai
 openai>=1.0.0
 dnspython
+apscheduler==3.10.4
